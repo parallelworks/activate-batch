@@ -1,0 +1,335 @@
+# yaml-language-server: $schema=https://activate.parallel.works/workflow.schema.json
+---
+# ==============================================================================
+# Hello World Batch Submitter
+# ==============================================================================
+# A simple example workflow demonstrating how to submit batch jobs using the
+# job_runner/v5.0 load balancer marketplace action. This workflow accepts a
+# series of commands, packages them into a script, and submits via the reusable
+# job_runner with multi-site load balancing support.
+#
+# This pattern leverages marketplace/job_runner/v5.0 for:
+#   - Multi-site load balancing (race or parallel execution)
+#   - Scheduler support (SLURM/PBS)
+#   - Job monitoring and output streaming
+#   - Automatic failover and cancellation handling
+#
+# Usage:
+#   1. Select a compute resource
+#   2. Enter commands to execute (one per line)
+#   3. Choose execution mode (SSH direct or scheduler)
+#   4. Run the workflow
+#
+# For more information, see README.md
+# ==============================================================================
+
+jobs:
+  # ============================================================================
+  # PREPROCESSING - Create the command script on the remote system
+  # ============================================================================
+  preprocessing:
+    working-directory: "${PW_PARENT_JOB_DIR}"
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Create working directory
+        run: |
+          set -e
+          mkdir -p "${PW_PARENT_JOB_DIR}"
+          echo "$(date) Working directory: ${PW_PARENT_JOB_DIR}"
+
+      - name: Create command script
+        run: |
+          set -e
+          echo "$(date) Creating command script..."
+
+          # Create the main execution script with header
+          cat > commands.sh << 'HEADER_EOF'
+          #!/bin/bash
+          set -e
+
+          echo "=============================================="
+          echo "  Hello World from Parallel Works ACTIVATE"
+          echo "=============================================="
+          echo ""
+          echo "System Information:"
+          echo "  Hostname:    $(hostname)"
+          echo "  Date:        $(date)"
+          echo "  User:        $(whoami)"
+          echo "  Directory:   $(pwd)"
+          echo "  Job ID:      ${PW_JOB_ID:-N/A}"
+          echo ""
+          echo "----------------------------------------------"
+          echo "  Executing Commands"
+          echo "----------------------------------------------"
+          echo ""
+          HEADER_EOF
+
+          # Append user commands to the script
+          cat >> commands.sh << 'USER_COMMANDS_EOF'
+          ${{ inputs.commands }}
+          USER_COMMANDS_EOF
+
+          # Add completion footer
+          cat >> commands.sh << 'FOOTER_EOF'
+
+          echo ""
+          echo "----------------------------------------------"
+          echo "  All commands completed"
+          echo "----------------------------------------------"
+          echo ""
+          echo "Finished at: $(date)"
+          echo "=============================================="
+          FOOTER_EOF
+
+          chmod +x commands.sh
+
+          echo "$(date) Script created successfully:"
+          echo "--- commands.sh ---"
+          cat commands.sh
+          echo "--- end of script ---"
+
+  # ============================================================================
+  # JOB RUNNER - Submit via v5.0 load balancer marketplace action
+  # ============================================================================
+  job_runner:
+    needs: [preprocessing]
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Submit batch job
+        early-cancel: any-job-failed
+        uses: marketplace/job_runner/v5.0
+        with:
+          execution_mode: "race"
+          rundir: "${PW_PARENT_JOB_DIR}"
+          poll_interval: 10
+          use_existing_script: true
+          script_path: "${PW_PARENT_JOB_DIR}/commands.sh"
+          # Site 0 - Primary resource
+          sites_0:
+            enabled: true
+            name: "Primary"
+            resource: ${{ inputs.resource }}
+            priority: 1
+            scheduler: ${{ inputs.scheduler }}
+            slurm:
+              account: ${{ inputs.slurm.account }}
+              partition: ${{ inputs.slurm.partition }}
+              qos: ${{ inputs.slurm.qos }}
+              time: ${{ inputs.slurm.time }}
+              nodes: ${{ inputs.slurm.nodes }}
+              cpus_per_task: ${{ inputs.slurm.cpus_per_task }}
+              gres: ${{ inputs.slurm.gres }}
+              mem: ${{ inputs.slurm.mem }}
+              scheduler_directives: |
+                ${{ inputs.slurm.scheduler_directives }}
+            pbs:
+              account: ${{ inputs.pbs.account }}
+              queue: ${{ inputs.pbs.queue }}
+              walltime: ${{ inputs.pbs.walltime }}
+              select: ${{ inputs.pbs.select }}
+              scheduler_directives: |
+                ${{ inputs.pbs.scheduler_directives }}
+          # Additional sites disabled by default (can be extended)
+          sites_1:
+            enabled: false
+          sites_2:
+            enabled: false
+          sites_3:
+            enabled: false
+          sites_4:
+            enabled: false
+
+      - name: Notify job ended
+        early-cancel: any-job-failed
+        run: touch job.ended
+
+# ==============================================================================
+# INPUT DEFINITIONS
+# ==============================================================================
+"on":
+  execute:
+    inputs:
+      # ========================================================================
+      # Core Settings
+      # ========================================================================
+      resource:
+        label: Compute Resource
+        type: compute-clusters
+        autoselect: true
+        optional: false
+        tooltip: Select the compute resource where the job will run
+
+      # ========================================================================
+      # Commands Configuration
+      # ========================================================================
+      commands:
+        label: Commands to Execute
+        type: editor
+        optional: false
+        default: |
+          # Enter your commands below (one per line)
+          # These will be packaged into a script and executed on the remote system
+
+          hostname
+          date
+          whoami
+          pwd
+          uname -a
+
+          echo "Environment variables:"
+          env | sort | head -20
+        tooltip: |
+          Enter the commands you want to execute on the remote system.
+          Each line will be executed in sequence.
+
+          Example commands:
+            hostname          - Display the compute node name
+            date              - Show current date/time
+            module avail      - List available modules
+            nvidia-smi        - Show GPU status (if available)
+
+      # ========================================================================
+      # Execution Mode
+      # ========================================================================
+      scheduler:
+        type: boolean
+        default: false
+        label: Submit via Scheduler?
+        hidden: ${{ inputs.resource.schedulerType == '' }}
+        tooltip: |
+          Enable to submit job through the cluster scheduler (SLURM/PBS).
+          Disable for direct SSH execution.
+
+      # ========================================================================
+      # SLURM Configuration
+      # ========================================================================
+      slurm:
+        type: group
+        label: SLURM Settings
+        hidden: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+        items:
+          account:
+            label: Account
+            type: slurm-accounts
+            resource: ${{ inputs.resource }}
+            optional: true
+            tooltip: SLURM account for job submission (--account)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          partition:
+            type: slurm-partitions
+            label: Partition
+            resource: ${{ inputs.resource }}
+            optional: true
+            tooltip: SLURM partition for job submission (--partition)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          qos:
+            label: Quality of Service
+            type: slurm-qos
+            resource: ${{ inputs.resource }}
+            optional: true
+            tooltip: SLURM QoS setting (--qos)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          time:
+            label: Walltime
+            type: string
+            default: "00:30:00"
+            tooltip: Maximum job duration, e.g., 00:30:00 (--time)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          nodes:
+            label: Nodes
+            type: number
+            default: 1
+            min: 1
+            optional: true
+            tooltip: Number of nodes to request (--nodes)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          cpus_per_task:
+            label: CPUs per Task
+            type: number
+            default: 1
+            min: 1
+            optional: true
+            tooltip: Number of CPUs per task (--cpus-per-task)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          gres:
+            label: Generic Resources (GPUs)
+            type: string
+            placeholder: "gpu:1"
+            optional: true
+            tooltip: Generic resource specification, e.g., gpu:1, gpu:a100:2 (--gres)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          mem:
+            label: Memory
+            type: string
+            placeholder: "8G"
+            optional: true
+            tooltip: Memory per node, e.g., 8G, 32000M (--mem)
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+          scheduler_directives:
+            type: editor
+            label: Additional Directives
+            optional: true
+            tooltip: |
+              Additional SLURM directives (one per line, include #SBATCH prefix)
+              Example:
+                #SBATCH --exclusive
+                #SBATCH --mail-type=END
+            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+
+      # ========================================================================
+      # PBS Configuration
+      # ========================================================================
+      pbs:
+        type: group
+        label: PBS Settings
+        hidden: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+        items:
+          account:
+            label: Account
+            type: string
+            optional: true
+            tooltip: PBS account for job submission (-A)
+            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+
+          queue:
+            label: Queue
+            type: string
+            optional: true
+            tooltip: PBS queue name (-q)
+            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+
+          walltime:
+            label: Walltime
+            type: string
+            default: "00:30:00"
+            tooltip: Maximum job duration, e.g., 00:30:00 (-l walltime=)
+            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+
+          select:
+            label: Resource Selection
+            type: string
+            placeholder: "1:ncpus=1"
+            optional: true
+            tooltip: PBS resource selection string (-l select=)
+            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+
+          scheduler_directives:
+            label: Additional Directives
+            type: editor
+            optional: true
+            tooltip: |
+              Additional PBS directives (one per line, include #PBS prefix)
+              Example:
+                #PBS -V
+                #PBS -m ae
+            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
