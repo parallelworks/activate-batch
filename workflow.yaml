@@ -106,7 +106,6 @@ jobs:
           poll_interval: 10
           use_existing_script: true
           script_path: "${PW_PARENT_JOB_DIR}/commands.sh"
-          # Site 0 - Primary resource
           sites_0:
             enabled: true
             name: "Primary"
@@ -119,19 +118,10 @@ jobs:
               qos: ${{ inputs.slurm.qos }}
               time: ${{ inputs.slurm.time }}
               nodes: ${{ inputs.slurm.nodes }}
-              cpus_per_task: ${{ inputs.slurm.cpus_per_task }}
-              gres: ${{ inputs.slurm.gres }}
-              mem: ${{ inputs.slurm.mem }}
-              scheduler_directives: |
-                ${{ inputs.slurm.scheduler_directives }}
             pbs:
               account: ${{ inputs.pbs.account }}
               queue: ${{ inputs.pbs.queue }}
               walltime: ${{ inputs.pbs.walltime }}
-              select: ${{ inputs.pbs.select }}
-              scheduler_directives: |
-                ${{ inputs.pbs.scheduler_directives }}
-          # Additional sites disabled by default (can be extended)
           sites_1:
             enabled: false
           sites_2:
