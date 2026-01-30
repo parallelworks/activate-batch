@@ -103,22 +103,27 @@ jobs:
         with:
           resource: ${{ inputs.resource }}
           rundir: "${PW_PARENT_JOB_DIR}"
-          poll_interval: 10
+          scheduler: ${{ inputs.submit_to_scheduler }}
           use_existing_script: true
           script_path: "${PW_PARENT_JOB_DIR}/commands.sh"
-          scheduler: ${{ inputs.scheduler }}
           slurm:
-            is_disabled: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            is_disabled: ${{ inputs.slurm.is_disabled }}
             account: ${{ inputs.slurm.account }}
             partition: ${{ inputs.slurm.partition }}
             qos: ${{ inputs.slurm.qos }}
             time: ${{ inputs.slurm.time }}
-            nodes: ${{ inputs.slurm.nodes }}
+            cpus_per_task: ${{ inputs.slurm.cpus_per_task }}
+            gres: ${{ inputs.slurm.gres }}
+            scheduler_directives: |
+              ${{ inputs.slurm.scheduler_directives }}
           pbs:
-            is_disabled: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            is_disabled: ${{ inputs.pbs.is_disabled }}
             account: ${{ inputs.pbs.account }}
             queue: ${{ inputs.pbs.queue }}
             walltime: ${{ inputs.pbs.walltime }}
+            select: ${{ inputs.pbs.select }}
+            scheduler_directives: |
+              ${{ inputs.pbs.scheduler_directives }}
 
       - name: Show job output
         run: |
@@ -186,143 +191,139 @@ jobs:
       # ========================================================================
       # Execution Mode
       # ========================================================================
-      scheduler:
+      submit_to_scheduler:
         type: boolean
+        label: Submit to Job Scheduler
+        tooltip: Enable to submit job via SLURM or PBS scheduler (detected automatically from resource). Disable for direct SSH execution.
         default: false
-        label: Submit via Scheduler?
-        hidden: ${{ inputs.resource.schedulerType == '' }}
-        tooltip: |
-          Enable to submit job through the cluster scheduler (SLURM/PBS).
-          Disable for direct SSH execution.
+        hidden: ${{ inputs.resource.schedulerType != 'slurm' && inputs.resource.schedulerType != 'pbs' }}
 
       # ========================================================================
       # SLURM Configuration
       # ========================================================================
       slurm:
         type: group
-        label: SLURM Settings
-        hidden: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+        label: SLURM Configuration
+        hidden: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
+        collapsed: true
         items:
+          is_disabled:
+            type: boolean
+            default: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
+            hidden: true
+
           account:
             label: Account
             type: slurm-accounts
             resource: ${{ inputs.resource }}
-            optional: true
             tooltip: SLURM account for job submission (--account)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            optional: true
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
 
           partition:
             type: slurm-partitions
             label: Partition
-            resource: ${{ inputs.resource }}
             optional: true
-            tooltip: SLURM partition for job submission (--partition)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            resource: ${{ inputs.resource }}
+            tooltip: Partition for job submission (--partition)
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
 
           qos:
-            label: Quality of Service
+            label: Quality of Service (QoS)
             type: slurm-qos
             resource: ${{ inputs.resource }}
-            optional: true
             tooltip: SLURM QoS setting (--qos)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            optional: true
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
+
+          cpus_per_task:
+            type: number
+            label: CPUs per Task
+            min: 1
+            max: 256
+            default: 1
+            tooltip: Number of CPUs for the job (--cpus-per-task)
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
 
           time:
             label: Walltime
             type: string
             default: "00:30:00"
             tooltip: Maximum job duration, e.g., 00:30:00 (--time)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
-
-          nodes:
-            label: Nodes
-            type: number
-            default: 1
-            min: 1
-            optional: true
-            tooltip: Number of nodes to request (--nodes)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
-
-          cpus_per_task:
-            label: CPUs per Task
-            type: number
-            default: 1
-            min: 1
-            optional: true
-            tooltip: Number of CPUs per task (--cpus-per-task)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
 
           gres:
-            label: Generic Resources (GPUs)
-            type: string
-            placeholder: "gpu:1"
+            label: GPUs (gres)
+            type: dropdown
+            default: ""
             optional: true
-            tooltip: Generic resource specification, e.g., gpu:1, gpu:a100:2 (--gres)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
-
-          mem:
-            label: Memory
-            type: string
-            placeholder: "8G"
-            optional: true
-            tooltip: Memory per node, e.g., 8G, 32000M (--mem)
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            tooltip: GPU resource specification (--gres). Leave empty for CPU-only jobs.
+            options:
+              - value: ""
+                label: "No GPU (CPU only)"
+              - value: "gpu:1"
+                label: "1 GPU (gpu:1)"
+              - value: "gpu:2"
+                label: "2 GPUs (gpu:2)"
+              - value: "gpu:4"
+                label: "4 GPUs (gpu:4)"
+              - value: "gpu:8"
+                label: "8 GPUs (gpu:8)"
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
 
           scheduler_directives:
             type: editor
             label: Additional Directives
             optional: true
-            tooltip: |
-              Additional SLURM directives (one per line, include #SBATCH prefix)
-              Example:
-                #SBATCH --exclusive
-                #SBATCH --mail-type=END
-            ignore: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            tooltip: Additional SLURM directives (include #SBATCH prefix)
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
 
       # ========================================================================
       # PBS Configuration
       # ========================================================================
       pbs:
         type: group
-        label: PBS Settings
-        hidden: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+        label: PBS Configuration
+        hidden: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
+        collapsed: true
         items:
+          is_disabled:
+            type: boolean
+            default: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
+            hidden: true
+
           account:
             label: Account
             type: string
             optional: true
             tooltip: PBS account for job submission (-A)
-            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
 
           queue:
             label: Queue
             type: string
             optional: true
             tooltip: PBS queue name (-q)
-            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
 
           walltime:
             label: Walltime
             type: string
             default: "00:30:00"
             tooltip: Maximum job duration, e.g., 00:30:00 (-l walltime=)
-            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
 
           select:
             label: Resource Selection
             type: string
+            default: "1:ncpus=1"
             placeholder: "1:ncpus=1"
-            optional: true
-            tooltip: PBS resource selection string (-l select=)
-            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            tooltip: PBS resource selection string, e.g., 1:ncpus=1 (-l select=)
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
 
           scheduler_directives:
             label: Additional Directives
             type: editor
+            tooltip: Additional PBS directives (include #PBS prefix)
             optional: true
-            tooltip: |
-              Additional PBS directives (one per line, include #PBS prefix)
-              Example:
-                #PBS -V
-                #PBS -m ae
-            ignore: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            ignore: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
