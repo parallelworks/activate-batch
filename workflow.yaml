@@ -107,7 +107,7 @@ jobs:
           use_existing_script: true
           script_path: "${PW_PARENT_JOB_DIR}/commands.sh"
           slurm:
-            is_disabled: ${{ inputs.slurm.is_disabled }}
+            is_disabled: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'slurm' }}
             account: ${{ inputs.slurm.account }}
             partition: ${{ inputs.slurm.partition }}
             qos: ${{ inputs.slurm.qos }}
@@ -117,7 +117,7 @@ jobs:
             scheduler_directives: |
               ${{ inputs.slurm.scheduler_directives }}
           pbs:
-            is_disabled: ${{ inputs.pbs.is_disabled }}
+            is_disabled: ${{ inputs.submit_to_scheduler != true || inputs.resource.schedulerType != 'pbs' }}
             account: ${{ inputs.pbs.account }}
             queue: ${{ inputs.pbs.queue }}
             walltime: ${{ inputs.pbs.walltime }}
