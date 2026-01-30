@@ -93,6 +93,9 @@ jobs:
   # ============================================================================
   job_runner:
     needs: [preprocessing]
+    working-directory: "${PW_PARENT_JOB_DIR}"
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
     steps:
       - name: Submit batch job
         early-cancel: any-job-failed
@@ -116,6 +119,20 @@ jobs:
             account: ${{ inputs.pbs.account }}
             queue: ${{ inputs.pbs.queue }}
             walltime: ${{ inputs.pbs.walltime }}
+
+      - name: Show job output
+        run: |
+          echo "=============================================="
+          echo "  Job Output"
+          echo "=============================================="
+          OUTPUT_FILE="run.${PW_JOB_ID}.out"
+          if [ -f "${OUTPUT_FILE}" ]; then
+            cat "${OUTPUT_FILE}"
+          else
+            echo "Output file not found: ${OUTPUT_FILE}"
+            echo "Files in directory:"
+            ls -la
+          fi
 
       - name: Notify job ended
         early-cancel: any-job-failed
