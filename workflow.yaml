@@ -4,15 +4,14 @@
 # Hello World Batch Submitter
 # ==============================================================================
 # A simple example workflow demonstrating how to submit batch jobs using the
-# job_runner/v5.0 load balancer marketplace action. This workflow accepts a
-# series of commands, packages them into a script, and submits via the reusable
-# job_runner with multi-site load balancing support.
+# job_runner/v4.0 marketplace action. This workflow accepts a series of
+# commands, packages them into a script, and submits via the reusable
+# job_runner.
 #
-# This pattern leverages marketplace/job_runner/v5.0 for:
-#   - Multi-site load balancing (race or parallel execution)
+# This pattern leverages marketplace/job_runner/v4.0 for:
 #   - Scheduler support (SLURM/PBS)
 #   - Job monitoring and output streaming
-#   - Automatic failover and cancellation handling
+#   - Automatic cancellation handling
 #
 # Usage:
 #   1. Select a compute resource
@@ -90,56 +89,50 @@ jobs:
           echo "--- end of script ---"
 
   # ============================================================================
-  # JOB RUNNER - Submit via v5.0 load balancer marketplace action
+  # JOB RUNNER - Submit via v4.0 marketplace action
   # ============================================================================
   job_runner:
     needs: [preprocessing]
+    working-directory: "${PW_PARENT_JOB_DIR}"
     ssh:
       remoteHost: ${{ inputs.resource.ip }}
     steps:
       - name: Submit batch job
         early-cancel: any-job-failed
-        uses: marketplace/job_runner/v5.0
+        uses: marketplace/job_runner/v4.0
         with:
-          execution_mode: "race"
+          resource: ${{ inputs.resource }}
           rundir: "${PW_PARENT_JOB_DIR}"
           poll_interval: 10
           use_existing_script: true
           script_path: "${PW_PARENT_JOB_DIR}/commands.sh"
-          # Site 0 - Primary resource
-          sites_0:
-            enabled: true
-            name: "Primary"
-            resource: ${{ inputs.resource }}
-            priority: 1
-            scheduler: ${{ inputs.scheduler }}
-            slurm:
-              account: ${{ inputs.slurm.account }}
-              partition: ${{ inputs.slurm.partition }}
-              qos: ${{ inputs.slurm.qos }}
-              time: ${{ inputs.slurm.time }}
-              nodes: ${{ inputs.slurm.nodes }}
-              cpus_per_task: ${{ inputs.slurm.cpus_per_task }}
-              gres: ${{ inputs.slurm.gres }}
-              mem: ${{ inputs.slurm.mem }}
-              scheduler_directives: |
-                ${{ inputs.slurm.scheduler_directives }}
-            pbs:
-              account: ${{ inputs.pbs.account }}
-              queue: ${{ inputs.pbs.queue }}
-              walltime: ${{ inputs.pbs.walltime }}
-              select: ${{ inputs.pbs.select }}
-              scheduler_directives: |
-                ${{ inputs.pbs.scheduler_directives }}
-          # Additional sites disabled by default (can be extended)
-          sites_1:
-            enabled: false
-          sites_2:
-            enabled: false
-          sites_3:
-            enabled: false
-          sites_4:
-            enabled: false
+          scheduler: ${{ inputs.scheduler }}
+          slurm:
+            is_disabled: ${{ inputs.resource.schedulerType != 'slurm' || inputs.scheduler == false }}
+            account: ${{ inputs.slurm.account }}
+            partition: ${{ inputs.slurm.partition }}
+            qos: ${{ inputs.slurm.qos }}
+            time: ${{ inputs.slurm.time }}
+            nodes: ${{ inputs.slurm.nodes }}
+          pbs:
+            is_disabled: ${{ inputs.resource.schedulerType != 'pbs' || inputs.scheduler == false }}
+            account: ${{ inputs.pbs.account }}
+            queue: ${{ inputs.pbs.queue }}
+            walltime: ${{ inputs.pbs.walltime }}
+
+      - name: Show job output
+        run: |
+          echo "=============================================="
+          echo "  Job Output"
+          echo "=============================================="
+          OUTPUT_FILE="run.${PW_JOB_ID}.out"
+          if [ -f "${OUTPUT_FILE}" ]; then
+            cat "${OUTPUT_FILE}"
+          else
+            echo "Output file not found: ${OUTPUT_FILE}"
+            echo "Files in directory:"
+            ls -la
+          fi
 
       - name: Notify job ended
         early-cancel: any-job-failed
